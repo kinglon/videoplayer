@@ -53,6 +53,7 @@
 #include <QCommandLineParser>
 #include <QScreen>
 #include <QStyle>
+#include <QMessageBox>
 #include "Utility/LogUtil.h"
 #include "Utility/DumpUtil.h"
 #include "Utility/ImPath.h"
@@ -84,26 +85,8 @@ void logToFile(QtMsgType type, const QMessageLogContext &context, const QString 
     }
 }
 
-int main(int argc, char *argv[])
+bool parseCommandLineParam(QApplication& app)
 {
-    QCoreApplication::setOrganizationName("niwenplay");
-    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
-    QApplication app(argc, argv);
-
-    qint64 processId = app.applicationPid();
-    g_dllLog = CLogUtil::GetLog((std::wstring(L"main_")+std::to_wstring(processId)).c_str());
-
-    // 初始化崩溃转储机制
-    CDumpUtil::SetDumpFilePath(CImPath::GetDumpPath().c_str());
-    CDumpUtil::Enable(true);
-
-    originalHandler = qInstallMessageHandler(logToFile);
-
-    // 打印完整的命令行参数
-    QStringList arguments = app.arguments();
-    QString fullCommandLine = arguments.join(" ");
-    qInfo() << "Full Command Line: " << fullCommandLine;
-
     // 解析命令行参数
     QCommandLineParser parser;
     QCommandLineOption titleOption("title", "window title", "title");
@@ -116,18 +99,72 @@ int main(int argc, char *argv[])
     parser.addOption(widthOption);
     QCommandLineOption heightOption("height", "height", "height");
     parser.addOption(heightOption);
+    QCommandLineOption enableLogOption("enablelog", "enablelog", "enablelog");
+    parser.addOption(enableLogOption);
+    QCommandLineOption singleInstanceOption("singleinstance", "singleinstance", "singleinstance");
+    parser.addOption(singleInstanceOption);
+    QCommandLineOption nwmessageOption("nwmessage", "nwmessage", "nwmessage");
+    parser.addOption(nwmessageOption);
     parser.process(app);
 
     SettingManager::GetInstance()->m_title = parser.value(titleOption);
     if (SettingManager::GetInstance()->m_title.isEmpty())
     {
         qCritical("need command line param");
-        return 1;
+        return false;
     }
     SettingManager::GetInstance()->m_url = parser.value(urlOption);
     SettingManager::GetInstance()->m_jsPath = parser.value(jsPathOption);
     SettingManager::GetInstance()->m_windowWidth = parser.value(widthOption).toInt();
     SettingManager::GetInstance()->m_windowHeight = parser.value(heightOption).toInt();
+    SettingManager::GetInstance()->m_enableLog = parser.value(enableLogOption).toInt()==1;
+    SettingManager::GetInstance()->m_singleInstance = parser.value(singleInstanceOption).toInt()==1;
+    SettingManager::GetInstance()->m_singleInstanceMessage = parser.value(nwmessageOption);
+
+    return true;
+}
+
+int main(int argc, char *argv[])
+{
+    QCoreApplication::setOrganizationName("niwenplay");
+    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    QApplication app(argc, argv);
+
+    if (!parseCommandLineParam(app))
+    {
+        return 1;
+    }
+
+    // 单实例控制
+    HANDLE mutexHandle = INVALID_HANDLE_VALUE;
+    if (SettingManager::GetInstance()->m_singleInstance)
+    {
+        const wchar_t* mutexName = L"{4ED33E4A-D83A-4D0A-8523-156D74420098}";
+        mutexHandle = CreateMutexW(nullptr, TRUE, mutexName);
+        if (mutexHandle == nullptr || GetLastError() == ERROR_ALREADY_EXISTS)
+        {
+            QMessageBox::information(nullptr, QString::fromStdWString(L"提示"),
+                                     SettingManager::GetInstance()->m_singleInstanceMessage);
+            return 0;
+        }
+    }
+
+    if (SettingManager::GetInstance()->m_enableLog)
+    {
+        qint64 processId = app.applicationPid();
+        g_dllLog = CLogUtil::GetLog((std::wstring(L"main_")+std::to_wstring(processId)).c_str());
+
+        // 打印完整的命令行参数
+        QStringList arguments = app.arguments();
+        QString fullCommandLine = arguments.join(" ");
+        qInfo() << "Full Command Line: " << fullCommandLine;
+    }
+
+    // 初始化崩溃转储机制
+    CDumpUtil::SetDumpFilePath(CImPath::GetDumpPath().c_str());
+    CDumpUtil::Enable(true);
+
+    originalHandler = qInstallMessageHandler(logToFile);
 
     MainWindow mainWindow;
     mainWindow.setWindowTitle(SettingManager::GetInstance()->m_title);
@@ -142,6 +179,12 @@ int main(int argc, char *argv[])
     int y = (screenGeometry.height() - mainWindow.height()) / 2;
     mainWindow.move(x, y);
     mainWindow.show();
+    app.exec();
 
-    return app.exec();
+    if (mutexHandle != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(mutexHandle);
+    }
+
+    return 0;
 }

@@ -17,6 +17,9 @@ public:
     QString m_jsPath;
     int m_windowWidth = 800;
     int m_windowHeight = 600;
+    bool m_enableLog = false;
+    bool m_singleInstance = false;
+    QString m_singleInstanceMessage;
 };
 
 #endif // SETTINGMANAGER_H
